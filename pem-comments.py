@@ -29,6 +29,10 @@ from cryptography.hazmat.primitives.serialization import (
 WHITESPACE = re.compile(r"\s*")
 
 
+class NotValidPEM(Exception):
+    pass
+
+
 class Analyser:
     pem_types = (
         {
@@ -86,9 +90,14 @@ class Analyser:
                     partial_pem_string += line
                     if current_detected_pem_type["end"] in line:
                         # deal with the finished pem data
-                        parsed_pem = self.load_pem(
-                            current_detected_pem_type["type"],
-                            partial_pem_string)
+                        try:
+                            parsed_pem = self.load_pem(
+                                current_detected_pem_type["type"],
+                                partial_pem_string)
+                        except NotValidPEM:
+                            if out:
+                                print(partial_pem_string, end="")
+                                partial_pem_string = ""
 
                         # this is the end, reset type
                         current_detected_pem_type = None
@@ -143,7 +152,11 @@ class PEM:
         # TODO: softfail if faulty pem data
         self.indent = re.match(WHITESPACE, pem_string).group(0) or ""
         self.pem_string = pem_string
-        self.pem = self.parse_pem()
+        try:
+            self.pem = self.parse_pem()
+        except ValueError:
+            raise NotValidPEM
+
         # TODO: Find issuer?
 
     def parse_pem(self):
