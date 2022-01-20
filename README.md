@@ -20,7 +20,7 @@ certificate is indeed the one that issued the main certificate.
 
 - Add unit tests with certificates, etc.
   - every type
-  - dublicates, so id can be checked
+  - duplicates, so id can be checked
   - for command line option
 - Add list of programs (with versions) that support pem comments pipeline?
 - pipline to make me check requirements
