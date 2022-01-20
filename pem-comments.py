@@ -99,6 +99,8 @@ class Analyser:
                             if out:
                                 print(partial_pem_string, end="")
                                 partial_pem_string = ""
+                                # this will prevent double print of last line
+                                continue
 
                         # this is the end, reset type
                         current_detected_pem_type = None
