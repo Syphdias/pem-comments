@@ -16,7 +16,7 @@
 from typing import TextIO, List
 from sys import stdin
 from argparse import ArgumentParser, FileType
-from textwrap import dedent
+from textwrap import dedent, indent
 from hashlib import sha256
 import re
 from cryptography.x509 import load_pem_x509_certificate, load_pem_x509_csr
@@ -75,6 +75,7 @@ class Analyser:
             comments: bool = False,
             under: bool = False,
             prefix: str = "# ",
+            indented: bool = True,
             ) -> None:
         # store type of pem we detected
         current_detected_pem_type = None
@@ -114,13 +115,12 @@ class Analyser:
 
                 # deal with the line itself
                 if parsed_pem:
-                    # since there is a parsed pem we can deal with it
-                    if comments and not under:
-                        print(parsed_pem.comment(prefix))
-                    if out:
-                        print(partial_pem_string, end="")
-                    if comments and under:
-                        print(parsed_pem.comment(prefix))
+                    parsed_pem.print(
+                        out=out,
+                        comments=comments,
+                        under=under,
+                        indented=args.indented
+                    )
 
                     # reset "partial" pem string and PEM object
                     partial_pem_string = ""
@@ -159,10 +159,32 @@ class PEM:
 
         # TODO: Find issuer?
 
+    def print(self,
+              out: bool = True,
+              comments: bool = True,
+              under: bool = False,
+              prefix: str = "# ",
+              indented: bool = True):
+        if comments and not under:
+            print(self.comment(prefix, indented))
+        if out:
+            if indented:
+                print(self.pem_string, end="")
+            else:
+                print(dedent(self.pem_string), end="")
+        if comments and under:
+            print(self.comment(prefix, indented))
+
+    def maybe_indent(self, comment, indented):
+        if indented:
+            return f"{self.indent}{comment}"
+
+        return comment
+
     def parse_pem(self):
         raise NotImplementedError
 
-    def comment(self):
+    def comment(self, prefix: str, indented: bool):
         raise NotImplementedError
 
 
@@ -171,7 +193,7 @@ class Certificate(PEM):
         prepared_pem_string = dedent(self.pem_string).encode()
         return load_pem_x509_certificate(prepared_pem_string)
 
-    def comment(self, prefix, format=None):
+    def comment(self, prefix: str, indented: bool = True, format=None):
         # TODO: implement different formats
         cn = (self.pem.subject
               .get_attributes_for_oid(NameOID.COMMON_NAME)[0].value or "")
@@ -180,10 +202,8 @@ class Certificate(PEM):
             str(self.pem.public_key().public_numbers().n).encode()
         ).hexdigest()[:8]
 
-        comment = (f"{self.indent}{prefix}"
-                   f"{short_public_key_hash}, {cn}, {expiration}")
-
-        return comment
+        comment = f"{prefix}{short_public_key_hash}, {cn}, {expiration}"
+        return self.maybe_indent(comment, indented)
 
     def public_key(self):
         return self.pem.public_key()
@@ -213,7 +233,7 @@ class CertificateRequest(PEM):
         prepared_pem_string = dedent(self.pem_string).encode()
         return load_pem_x509_csr(prepared_pem_string)
 
-    def comment(self, prefix, format=None):
+    def comment(self, prefix: str, indented: bool = True, format=None):
         # TODO: implement different formats
         cn = (self.pem.subject
               .get_attributes_for_oid(NameOID.COMMON_NAME)[0].value or "")
@@ -221,7 +241,8 @@ class CertificateRequest(PEM):
             str(self.pem.public_key().public_numbers().n).encode()
         ).hexdigest()[:8]
 
-        return f"{self.indent}{prefix}{short_public_key_hash}, {cn}"
+        comment = f"{prefix}{short_public_key_hash}, {cn}"
+        return self.maybe_indent(comment, indented)
 
 
 class PrivateKey(PEM):
@@ -229,13 +250,14 @@ class PrivateKey(PEM):
         prepared_pem_string = dedent(self.pem_string).encode()
         return load_pem_private_key(prepared_pem_string, password=None)
 
-    def comment(self, prefix, format=None):
+    def comment(self, prefix: str, indented: bool = True, format=None):
         # TODO: implement different formats
         short_public_key_hash = sha256(
             str(self.pem.public_key().public_numbers().n).encode()
         ).hexdigest()[:8]
 
-        return f"{self.indent}{prefix}{short_public_key_hash}"
+        comment = f"{prefix}{short_public_key_hash}"
+        return self.maybe_indent(comment, indented)
 
 
 class PublicKey(PEM):
@@ -243,13 +265,14 @@ class PublicKey(PEM):
         prepared_pem_string = dedent(self.pem_string).encode()
         return load_pem_public_key(prepared_pem_string)
 
-    def comment(self, prefix, format=None):
+    def comment(self, prefix: str, indented: bool = True, format=None):
         # TODO: implement different formats
         short_public_key_hash = sha256(
             str(self.pem.public_numbers().n).encode()
         ).hexdigest()[:8]
 
-        return f"{self.indent}{prefix}{short_public_key_hash}"
+        comment = f"{self.indent}{prefix}{short_public_key_hash}"
+        return self.maybe_indent(comment, indented)
 
     def public_key(self):
         return self
@@ -264,7 +287,9 @@ def main(args):
         out=args.out,
         comments=args.comments,
         under=args.under,
-        prefix="# ")
+        prefix="# ",
+        indented=args.indented
+    )
 
 
 if __name__ == "__main__":
@@ -283,6 +308,8 @@ if __name__ == "__main__":
                         action="store_false",
                         default=True,
                         help="Why do you want that? - Mostly for debugging")
+    parser.add_argument("--noindent", dest="indented",
+                        action="store_false", default=True)
     # parser.add_argument("--password-file"
     #                     help="Password file for private key")
     # parser.add_argument("--show-signer", action="store_true", default=False)
