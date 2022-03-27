@@ -10,13 +10,14 @@
 #
 # Best effort, no idea about crypto, no verification,
 # only check pub to make sure certs match up
+# (not serial, not subject, not signature(s), not timest, etc.)
 #
 # example comments:
 # # CN=*.example.com example.com 2022-01-11 alice1 by bob1
 from typing import TextIO, List
 from sys import stdin
 from argparse import ArgumentParser, FileType
-from textwrap import dedent, indent
+from textwrap import dedent
 from hashlib import sha256
 import re
 from cryptography.x509 import load_pem_x509_certificate, load_pem_x509_csr
@@ -34,7 +35,7 @@ class NotValidPEM(Exception):
 
 
 class Analyser:
-    pem_types = (
+    infos_about_detectable_pems = (
         {
             "start": "-----BEGIN CERTIFICATE-----",
             "end": "-----END CERTIFICATE-----",
@@ -77,76 +78,117 @@ class Analyser:
             prefix: str = "# ",
             indented: bool = True,
             ) -> None:
-        # store type of pem we detected
-        current_detected_pem_type = None
+        # store infos about of pem we detected
+        current_detected_pem_info = None
         # store the lines of pem we detected
         partial_pem_string = ""
         # store pared pam (cer, key, etc.)
         parsed_pem = None
 
+        # fill results
+        results = Results()
         for iostream in iostreams:
             for line in iostream:
                 # if we have an active pem we we need to find its end
-                if current_detected_pem_type:
+                if current_detected_pem_info:
                     partial_pem_string += line
-                    if current_detected_pem_type["end"] in line:
+                    if current_detected_pem_info["end"] in line:
                         # deal with the finished pem data
                         try:
                             parsed_pem = self.load_pem(
-                                current_detected_pem_type["type"],
+                                current_detected_pem_info["type"],
                                 partial_pem_string)
+                            results.append(parsed_pem)
                         except NotValidPEM:
-                            if out:
-                                print(partial_pem_string, end="")
-                                partial_pem_string = ""
-                                # this will prevent double print of last line
-                                continue
+                            results.append(partial_pem_string)
 
-                        # this is the end, reset type
-                        current_detected_pem_type = None
-                        # we still need parsed_pem and partial_pem_string
-                        # reset happens afterwards
+                        # Reset current PEM parsing
+                        current_detected_pem_info = None
+                        parsed_pem = None
+                        partial_pem_string = ""
 
                 # if we have no active pem we check if there is one
                 else:
-                    for detectable in self.pem_types:
-                        if detectable["start"] in line:
+                    for detectable_pem in self.infos_about_detectable_pems:
+                        if detectable_pem["start"] in line:
                             # this is the start of a pem
-                            current_detected_pem_type = detectable
+                            current_detected_pem_info = detectable_pem
                             partial_pem_string += line
+                    if not current_detected_pem_info:
+                        # There was no start of PEM
+                        results.append(line)
 
-                # deal with the line itself
-                if parsed_pem:
-                    parsed_pem.print(
-                        out=out,
-                        comments=comments,
-                        under=under,
-                        indented=args.indented
-                    )
-
-                    # reset "partial" pem string and PEM object
-                    partial_pem_string = ""
-                    parsed_pem = None
-                    # TODO: optimization idea: do I keep contents of
-                    # partial_pem_string in PEM object?
-
-                elif not partial_pem_string:
-                    # if there is a partial pem, we do nothing for now
-                    # since the analysis is in progress,
-                    # but if there is not, treat it like a regular line
-                    if out:
-                        print(line, end="")
+                # if wanted and possible, print the currently printable
+                results.consume(
+                    out=out,
+                    comments=comments,
+                    under=under,
+                    indented=args.indented,
+                )
 
             iostream.close()
 
             # if there is unfinished pem, just treat it like regular lines
             if partial_pem_string:
-                if out:
-                    print(partial_pem_string, end="")
+                results.append(partial_pem_string)
+                # Reset current PEM parsing
+                current_detected_pem_info = None
+                parsed_pem = None
+                partial_pem_string = ""
+
+            # TODO: Should I results.consume here to finish all of one iostream?
+
+        # We are done with all input
+        # We can not analyse everything left and print
+        results.consume(
+            delay=False,
+            out=out,
+            comments=comments,
+            under=under,
+            indented=args.indented,
+        )
 
     def load_pem(self, pem_type: str, pem_string: str):
         pem_class = eval(pem_type)
         return pem_class(pem_string)
+
+
+class Results(list):
+    """This class collects the parsed and unparsed contents"""
+    def __init__(self, *args):
+        super().__init__(*args)
+        self.certs = set()
+
+    def consume(self, delay: bool = False, out: bool = True, **print_options) -> None:
+        """Print all elements up to this point in Result
+
+        Normal lines will be printed as is, PEMs use the print method with
+        given options.
+        """
+        # Do not consume
+        if delay:
+            return
+
+        while self:
+            element = self.pop(0)
+            if isinstance(element, PEM):
+                element.print(out=out, **print_options)
+            else:
+                if out:
+                    print(element, end="")
+
+    def append(self, __object) -> None:
+        appended = super().append(__object)
+
+        if isinstance(__object, Certificate):
+            self.certs.add(__object)
+
+        # self.__analyse_certs()
+
+        return appended
+
+    def __analyse_certs(self):
+        raise NotImplementedError
 
 
 class PEM:
@@ -219,10 +261,10 @@ class Certificate(PEM):
     def __a_signed_b(self, issuer_cert, sub_cert):
         try:
             issuer_cert.public_key().verify(
-                signature=sub_cert.signature,
-                data=sub_cert.tbs_certificate_bytes,
+                signature=sub_cert.pem.signature,
+                data=sub_cert.pem.tbs_certificate_bytes,
                 padding=padding.PKCS1v15(),
-                algorithm=sub_cert.signature_hash_algorithm,
+                algorithm=sub_cert.pem.signature_hash_algorithm,
             )
         except InvalidSignature:
             return False
