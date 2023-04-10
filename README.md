@@ -1,5 +1,5 @@
-**This is currently work in progress, please check back in a few days or weeks,
-when I am happy with the result.**
+**This is currently work in progress. I am not currently working on it, which
+is why this has no proper documentation, license, etc.**
 
 ## Disclaimer
 
